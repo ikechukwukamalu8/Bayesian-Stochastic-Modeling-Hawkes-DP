@@ -1,0 +1,81 @@
+﻿# ==============================================================================
+# PROJECT: Hawkes Process Diagnostic Analysis
+# FOCUS: Model Validation through Transformed Residuals (Exponentiality Test)
+# ==============================================================================
+
+# Load libraries (ensure these match those used in the main modeling script)
+library(tidyverse)
+library(ggplot2)
+library(stats4) 
+library(MASS) # For residual analysis
+
+# ------------------------------------------------------------------------------
+# 1. Re-load Data and MLE Parameters (Ensure these are passed/loaded correctly)
+# NOTE: In a real GitHub repo, you might source the first file or save/load 
+# the parameters. For this script, we assume the same data setup:
+# ------------------------------------------------------------------------------
+
+cases_url <- "https://raw.githubusercontent.com/CSSEGISANDData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+covid_data <- read_csv(cases_url, show_col_types = FALSE)
+country <- "Italy"
+covid_country <- covid_data %>%
+  filter(`Country/Region` == country) %>%
+  select(-c(`Province/State`, `Lat`, `Long`, `Country/Region`)) %>%
+  summarise(across(everything(), \(x) sum(x, na.rm = TRUE)))
+dates <- as.Date(names(covid_country), format = "%m/%d/%y")
+cases <- as.numeric(covid_country[1, ])
+new_cases <- c(NA, diff(cases))
+new_cases[is.na(new_cases) | new_cases < 0] <- 0 
+covid_df <- data.frame(Date = dates, NewCases = new_cases)
+covid_df$Days <- as.numeric(covid_df$Date - min(covid_df$Date))
+event_times <- covid_df$Days[covid_df$NewCases > 0]
+
+# **ASSUMED MLE PARAMETERS from Hawkes_Process_Bayesian_Modeling.R**
+# NOTE: Replace these dummy values with the actual MLE output for reproducibility
+mu_hat <- 0.05
+alpha_hat <- 0.2
+beta_hat <- 0.8
+mle_params <- c(mu_hat, alpha_hat, beta_hat) 
+
+
+# ------------------------------------------------------------------------------
+# 2. Model Diagnostics: Testing Transformed Residuals
+# ------------------------------------------------------------------------------
+
+# For a correctly fitted Hawkes Process, the transformed inter-arrival times 
+# (the residuals) must follow an i.i.d. Exponential(1) distribution.
+
+# Define the integrated intensity function (Λ(t)) calculation
+integrated_intensity <- function(t, event_times, mu, alpha, beta) {
+  mu * t + (alpha / beta) * sum(1 - exp(-beta * (t - event_times[event_times < t])))
+}
+
+# Calculate cumulative intensity function Λ(t) at each event time
+Lambda_t_events <- sapply(event_times, function(t) {
+  integrated_intensity(t, event_times, mu_hat, alpha_hat, beta_hat)
+})
+
+# Compute residuals (inter-arrival times of the transformed process)
+residuals <- diff(c(0, Lambda_t_events)) 
+residuals <- residuals[residuals > 0] # Filter for valid, positive residuals
+
+# Histogram of Transformed Residuals (Should look Exponential(1))
+hist(residuals, breaks=20, probability=TRUE, col="lightblue", 
+     main="Residual Analysis: Transformed Inter-Arrival Times",
+     xlab="Residuals (Should be Exp(1))")
+curve(dexp(x, rate=1), add=TRUE, col="red", lwd=2, lty=2) 
+# 
+
+# QQ-Plot for Transformed Residuals (Visual Check for Exponentiality)
+qqplot(qexp(ppoints(length(residuals))), residuals, 
+       main="QQ-Plot for Transformed Residuals",
+       xlab="Theoretical Exponential(1) Quantiles", ylab="Sample Quantiles")
+abline(0, 1, col="red", lwd=2) # Reference line y=x
+# 
+
+# Formal Test for Exponentiality (e.g., Kolmogorov-Smirnov test)
+ks_test <- ks.test(residuals, "pexp", 1)
+cat("\nKolmogorov-Smirnov Test for Exponential(1) Distribution:\n")
+print(ks_test)
+
+# NOTE: A non-significant p-value indicates the model fits the data well.

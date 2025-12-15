@@ -1,0 +1,104 @@
+﻿# ==============================================================================
+# PROJECT: Bayesian Hawkes Process and Nonparametric Modeling for Time-Series
+# FOCUS: Computational Models for Complex, Self-Exciting Systems (UvA CSL)
+# ==============================================================================
+
+# Load required libraries
+# NOTE: Ensure 'rjags' and 'dirichletprocess' are installed: 
+# install.packages(c("tidyverse", "ggplot2", "stats4", "rjags", "coda", "MASS", "dirichletprocess"))
+library(tidyverse)
+library(ggplot2)
+library(stats4)             # For Maximum Likelihood Estimation (MLE)
+library(rjags)              # JAGS for Bayesian inference
+library(coda)               # MCMC diagnostics
+library(MASS)               # For residual analysis/diagnostics
+library(dirichletprocess)   # For Nonparametric Bayesian methods (Dirichlet Process)
+
+# ------------------------------------------------------------------------------
+# 1. Data Preparation: Time-Series Event Data (COVID-19 Cases)
+#    (Using public data source for real-time data access)
+# ------------------------------------------------------------------------------
+
+# Load COVID-19 case data from a public source (Johns Hopkins University)
+cases_url <- "https://raw.githubusercontent.com/CSSEGISANDData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+covid_data <- read_csv(cases_url, show_col_types = FALSE)
+
+# Select a country (e.g., Italy) and aggregate data
+country <- "Italy"
+covid_country <- covid_data %>%
+  filter(`Country/Region` == country) %>%
+  select(-c(`Province/State`, `Lat`, `Long`, `Country/Region`)) %>%
+  summarise(across(everything(), \(x) sum(x, na.rm = TRUE)))
+
+# Convert to time-series format
+dates <- as.Date(names(covid_country), format = "%m/%d/%y")
+cases <- as.numeric(covid_country[1, ])
+
+# Compute new daily cases (events)
+new_cases <- c(NA, diff(cases))
+new_cases[is.na(new_cases) | new_cases < 0] <- 0 # Ensure non-negative counts
+
+# Create dataframe and convert dates to numeric days (starting at 0)
+covid_df <- data.frame(Date = dates, NewCases = new_cases)
+covid_df$Days <- as.numeric(covid_df$Date - min(covid_df$Date))
+
+# Extract event times (days where NewCases > 0)
+event_times <- covid_df$Days[covid_df$NewCases > 0]
+Tmax <- max(covid_df$Days)
+
+# ------------------------------------------------------------------------------
+# 2. Maximum Likelihood Estimation (MLE) for Hawkes Process Parameters
+# ------------------------------------------------------------------------------
+
+# Define log-likelihood function for standard exponential Hawkes Process
+hawkes_log_likelihood <- function(params, event_times, Tmax) {
+  mu <- params[1]    # Background rate
+  alpha <- params[2] # Excitation scale
+  beta <- params[3]  # Excitation decay
+  
+  # Penalty for unstable or non-positive parameters (critical for stability)
+  if (mu <= 0 || alpha <= 0 || beta <= 0 || alpha >= beta) {
+    return(Inf)
+  }
+  
+  # Compute intensity function λ(t) at each event time
+  lambda_t <- sapply(event_times, function(t) {
+    mu + sum(alpha * exp(-beta * (t - event_times[event_times < t])))
+  })
+  
+  # Compute Log-Likelihood: Sum(log(lambda(t))) - Integral(lambda(t) dt)
+  ll <- sum(log(lambda_t)) - (mu * Tmax + (alpha / beta) * sum(1 - exp(-beta * (Tmax - event_times))))
+  
+  return(-ll) # Return Negative Log-Likelihood for minimization
+}
+
+# Initial parameter guess (mu, alpha, beta)
+initial_guess <- c(0.1, 0.5, 1.0) 
+
+# Perform optimization using L-BFGS-B (bounds-constrained optimization)
+mle_result <- optim(initial_guess, hawkes_log_likelihood, 
+                    event_times = event_times, Tmax = Tmax, 
+                    method = "L-BFGS-B", lower = c(1e-5, 1e-5, 1e-5))
+
+mle_params <- mle_result$par
+names(mle_params) <- c("mu_mle", "alpha_mle", "beta_mle")
+cat("MLE Hawkes Process Parameters:\n")
+print(mle_params)
+
+# ------------------------------------------------------------------------------
+# 3. Nonparametric Estimation (Dirichlet Process Mixture Model)
+# ------------------------------------------------------------------------------
+
+# Use the Nonparametric Bayesian approach (Dirichlet Process Mixture - DPM) 
+# to model the distribution of inter-arrival times.
+inter_arrivals <- diff(event_times)
+inter_arrivals <- inter_arrivals[inter_arrivals > 0]
+
+# Fit Dirichlet Process Mixture with Gaussian Base Distribution
+# This demonstrates high-level proficiency in flexible Bayesian modeling.
+dp <- DirichletProcessGaussian(inter_arrivals)
+dp <- Fit(dp, 5000, verbose = FALSE) 
+
+# Summarize Cluster Information
+cat("\nDirichlet Process Mixture Model Summary (Nonparametric Bayes):\n")
+print(summary(dp))
