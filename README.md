@@ -1,7 +1,7 @@
 # Bayesian Hawkes Process and Nonparametric Modeling for Complex Systems
 
 ## 🎯 Project Objective
-This project demonstrates the application of stochastic process modeling (Hawkes Process) and Nonparametric Bayesian methods (Dirichlet Process Mixture) to analyze self-exciting events in real-world time-series data (e.g., COVID-19 cases). The goal is to make complex, temporal dependencies tractable through advanced computational inference techniques, aligning with the UvA CSL mission.
+This project demonstrates the application of stochastic process modeling (Hawkes Process) and Nonparametric Bayesian methods (Dirichlet Process Mixture) to analyze self-exciting events in real-world time-series data (e.g., COVID-19 cases). The goal is to make complex, temporal dependencies tractable through advanced computational inference techniques.
 
 ## 🛠️ Key Technical Skills Demonstrated
 * **Stochastic Processes:** Implementation and parameter estimation (MLE) of the Hawkes Process.
