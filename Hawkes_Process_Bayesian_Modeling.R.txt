@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 # PROJECT: Bayesian Hawkes Process and Nonparametric Modeling for Time-Series
-# FOCUS: Computational Models for Complex, Self-Exciting Systems (UvA CSL)
+# FOCUS: Computational Models for Complex, Self-Exciting Systems 
 # ==============================================================================
 
 # Load required libraries
