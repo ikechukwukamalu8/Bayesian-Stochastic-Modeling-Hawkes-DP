@@ -1,78 +1,125 @@
 # ==============================================================================
-# ADVANCED RESEARCH SOLUTION: Nonparametric Bayesian Intensity Estimation
+# SCRIPT 3: Nonparametric Bayesian Intensity Estimation
 # FOCUS: Well-Calibrated Uncertainty Quantification for Complex Point Processes
+# PORTABILITY: Fully automated for cross-platform local machine execution
 # ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Environment & Dependency Management
+# ------------------------------------------------------------------------------
+cat("📦 Checking dependencies and initializing system environment...\n")
+
+# Automated CRAN package installer and loader
+required_packages <- c("tidyverse", "ggplot2", "rjags", "coda")
+missing_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
+
+if (length(missing_packages) > 0) {
+  cat("Installing missing CRAN libraries:", paste(missing_packages, collapse = ", "), "\n")
+  install.packages(missing_packages, repos = "https://cloud.r-project.org")
+}
 
 library(tidyverse)
 library(ggplot2)
 library(rjags)
 library(coda)
 
-cat("🚀 Initializing Nonparametric Bayesian Intensity Sampler...\n")
+# Local System Check for the native JAGS compiler engine
+# (rjags will fail to load on a local machine if the underlying software is missing)
+jags_built <- tryCatch({
+  jags.version()
+  TRUE
+}, error = function(e) {
+  FALSE
+})
 
-# 1. Generate a regular evaluation grid across our timeline
-# (Using the event_times data structure calculated in Script 1)
+if (!jags_built) {
+  stop("\n[SYSTEM ERROR]: Native JAGS installation not detected!\n",
+       "To run this script locally, you must install the JAGS compiler software on your computer:\n",
+       " • Windows/Mac: Download from https://sourceforge.net/projects/mcmc-jags/\n",
+       " • Linux (Ubuntu/Debian): Run 'sudo apt-get install jags' in your terminal.\n")
+}
+
+# ------------------------------------------------------------------------------
+# 2. Re-Load Data Structure (Ensuring standalone functionality)
+# ------------------------------------------------------------------------------
+cat("📥 Pulling operational data timeline...\n")
+cases_url <- "https://raw.githubusercontent.com/CSSEGISANDData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+covid_data <- read_csv(cases_url, show_col_types = FALSE)
+
+country <- "Italy"
+covid_country <- covid_data %>%
+  filter(`Country/Region` == country) %>%
+  dplyr::select(-c(`Province/State`, `Lat`, `Long`, `Country/Region`)) %>%
+  summarise(across(everything(), \(x) sum(x, na.rm = TRUE)))
+
+dates <- as.Date(names(covid_country), format = "%m/%d/%y")
+cases <- as.numeric(covid_country[1, ])
+new_cases <- c(NA, diff(cases))
+new_cases[is.na(new_cases) | new_cases < 0] <- 0 
+
+covid_df <- data.frame(Date = dates, NewCases = new_cases)
+covid_df$Days <- as.numeric(covid_df$Date - min(covid_df$Date))
+event_times <- covid_df$Days[covid_df$NewCases > 0]
+
+# ------------------------------------------------------------------------------
+# 3. Discretization Grid Formulating
+# ------------------------------------------------------------------------------
 grid_size <- 50
 time_grid <- seq(0, max(event_times), length.out = grid_size)
-
-# Compute empirical event counts falling into each grid interval
 bin_counts <- hist(event_times, breaks = time_grid, plot = FALSE)$counts
 N_bins <- length(bin_counts)
 mid_points <- time_grid[-1]
 
-# 2. Define a Nonparametric Bayesian Model in BUGS/JAGS syntax
-# Instead of forcing an exponential curve, we place a flexible Random Walk (Prior)
-# over the log-intensity to allow the data to dictate the shape dynamically.
+# ------------------------------------------------------------------------------
+# 4. Hierarchical Bayesian Graphical Model Structure (BUGS Syntax)
+# ------------------------------------------------------------------------------
 jags_model_string <- "
 model {
-  # Likelihood: Counts in each interval follow a Poisson process driven by intensity lambda
   for (t in 1:N_bins) {
     bin_counts[t] ~ dpois(lambda[t])
     log(lambda[t]) <- intensity_lat[t]
   }
   
-  # Nonparametric Prior: First-order Random Walk (Intrinsic Autoregressive Prior)
-  # This acts as a smoothing prior, allowing flexible non-parametric shapes.
   intensity_lat[1] ~ dnorm(0, 0.01)
   for (t in 2:N_bins) {
     intensity_lat[t] ~ dnorm(intensity_lat[t-1], tau)
   }
   
-  # Hyperprior on the smoothing precision (controls model complexity)
   tau ~ dgamma(1, 0.05)
   sigma <- 1 / sqrt(tau)
 }
 "
 
-# 3. Package data for the JAGS engine
 jags_data <- list(
   bin_counts = bin_counts,
   N_bins = N_bins
 )
 
-# 4. Compile and run the Markov Chain Monte Carlo (MCMC) sampler
-cat("⏳ Compiling JAGS model and running MCMC chains...\n")
+# ------------------------------------------------------------------------------
+# 5. MCMC Simulation Processing Engine
+# ------------------------------------------------------------------------------
+cat("⏳ Initializing MCMC chains via JAGS engine...\n")
 model_compile <- jags.model(textConnection(jags_model_string), 
                              data = jags_data, 
                              n.chains = 2, 
                              n.adapt = 500)
 
-update(model_compile, 500) # Burn-in period
+update(model_compile, 500) # Burn-in iterations
 
 posterior_samples <- coda.samples(model_compile, 
                                   variable.names = c("lambda", "sigma"), 
                                   n.iter = 2000)
 
-# 5. Extract posterior distributions for well-calibrated Uncertainty Quantification
+# ------------------------------------------------------------------------------
+# 6. Extracting Posterior Samples & Credible Horizons (UQ Matrix)
+# ------------------------------------------------------------------------------
 samples_matrix <- as.matrix(posterior_samples)
 lambda_cols <- grep("lambda", colnames(samples_matrix))
 
-# Calculate the posterior mean and the exact 95% Bayesian Credible Intervals
-post_mean <- colMeans(samples_matrix[, lambda_cols])
+post_mean  <- colMeans(samples_matrix[, lambda_cols])
 post_lower <- apply(samples_matrix[, lambda_cols], 2, quantile, probs = 0.025)
 post_upper <- apply(samples_matrix[, lambda_cols], 2, quantile, probs = 0.975)
 
-# Create a clean reporting dataframe
 plot_df <- data.frame(
   Time = mid_points,
   Observed = bin_counts,
@@ -81,19 +128,24 @@ plot_df <- data.frame(
   UpperCI = post_upper
 )
 
-# 6. Visualize the Well-Calibrated Uncertainty Bounds
-cat("\n📊 Plotting Nonparametric Bayesian Intensity and Uncertainty Bounds...\n")
-ggplot(plot_df, aes(x = Time)) +
+# ------------------------------------------------------------------------------
+# 7. Rendering Well-Calibrated Analytical Report Plots
+# ------------------------------------------------------------------------------
+cat("\n📊 Rendering visualization dashboard plot...\n")
+uq_plot <- ggplot(plot_df, aes(x = Time)) +
   geom_point(aes(y = Observed, color = "Observed Event Counts"), alpha = 0.6, size = 2) +
-  geom_line(aes(y = PosteriorMean, color = "Posterior Mean Intensity"), size = 1.2) +
+  geom_line(aes(y = PosteriorMean, color = "Posterior Mean Intensity"), linewidth = 1.2) +
   geom_ribbon(aes(ymin = LowerCI, ymax = UpperCI), fill = "purple", alpha = 0.15) +
   scale_color_manual(values = c("Observed Event Counts" = "black", "Posterior Mean Intensity" = "purple")) +
   theme_minimal() +
   labs(
     title = "Nonparametric Bayesian Intensity Estimation",
-    subtitle = "Shaded area tracks the explicit 95% Bayesian Credible Interval (Uncertainty Quantification)",
-    x = "Timeline (Days)",
-    y = "Event Intensity / Counts",
-    color = "Legend"
+    subtitle = "Shaded boundary represents explicit 95% Bayesian Credible Intervals (Robust UQ)",
+    x = "Timeline (Normalized Days)",
+    y = "Event Intensity Profile / Interval Counts",
+    color = "Legend Components"
   ) +
   theme(legend.position = "bottom")
+
+print(uq_plot)
+cat("✅ Script 3 execution complete. Visual reporting delivered successfully.\n")
